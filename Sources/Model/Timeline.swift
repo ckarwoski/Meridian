@@ -83,6 +83,30 @@ enum Timeline {
         let after = timeZone.secondsFromGMT(for: moment)
         return before == after ? nil : Jump(moment: moment, offsetBefore: before, offsetAfter: after)
     }
+
+    /// Whether the wall time at `moment` happens twice in `timeZone`, as
+    /// 1:30 am does on the day the US falls back. Looks for the same wall
+    /// reading on any other offset the zone uses within a day either side.
+    static func wallTimeRepeats(in timeZone: TimeZone, at moment: Date) -> Bool {
+        let offset = timeZone.secondsFromGMT(for: moment)
+        let nearby = Set([-86400.0, 86400.0].map { timeZone.secondsFromGMT(for: moment.addingTimeInterval($0)) })
+        return nearby.contains { other in
+            // The instant that reads the same on the wall under `other`.
+            other != offset && timeZone.secondsFromGMT(for: moment.addingTimeInterval(TimeInterval(offset - other))) == other
+        }
+    }
+
+    /// Whether the hour cell starting at `slot` should name its zone's
+    /// abbreviation, so the two copies of a repeated hour can be told
+    /// apart: "1:30a MDT", "1:30a MST". True next to a jump on either edge,
+    /// when the offset changes inside the hour, or when the cell's wall
+    /// time happens twice.
+    static func cellNeedsZone(in timeZone: TimeZone, slot: Date) -> Bool {
+        jump(in: timeZone, at: slot) != nil
+            || jump(in: timeZone, at: slot.addingTimeInterval(3600)) != nil
+            || clocksChange(in: timeZone, duringHourStarting: slot)
+            || wallTimeRepeats(in: timeZone, at: slot)
+    }
 }
 
 /// A daylight-saving transition in one zone.
@@ -180,5 +204,24 @@ struct ClockChangeGroup: Identifiable, Hashable, Sendable {
             }
         }
         return groups.map(ClockChangeGroup.init)
+    }
+}
+
+extension ClockChanges {
+    /// The range the planner searches: from the start of today or the shown
+    /// day, whichever is earlier, through the whole of the day `days` after
+    /// the shown day.
+    static func lookahead(shown: CivilDay, today: CivilDay, days: Int, in zone: TimeZone) -> Range<Date> {
+        let last = shown.adding(days: max(days, 1))
+        return min(shown, today).start(in: zone)..<last.adding(days: 1).start(in: zone)
+    }
+}
+
+extension CivilDay {
+    /// Whole calendar days from this day to `other`: 2 from Oct 27 to
+    /// Oct 29, negative when `other` is earlier.
+    func days(to other: CivilDay) -> Int {
+        let utc = TimeZone(identifier: "UTC")!
+        return Calendar.gregorian(in: utc).dateComponents([.day], from: noon(in: utc), to: other.noon(in: utc)).day ?? 0
     }
 }

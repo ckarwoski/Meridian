@@ -40,16 +40,14 @@ struct PlannerView: View {
         .background(.background)
     }
 
-    /// Changes from today (or the shown day, if earlier) to the end of the
-    /// look-ahead window after the shown day. Changes between today and a
-    /// future shown day matter too: they make that day's gaps differ from
-    /// today's.
+    /// Changes from today (or the shown day, if earlier) through the last
+    /// day of the look-ahead window after the shown day. Changes between
+    /// today and a future shown day matter too: they make that day's gaps
+    /// differ from today's.
     private func clockChanges(now: Date) -> [ClockChange] {
         let zone = store.referenceZone
-        let shownStart = store.day.start(in: zone)
-        let todayStart = CivilDay(now, in: zone).start(in: zone)
-        let end = store.day.adding(days: max(lookaheadDays, 1)).start(in: zone)
-        return ClockChanges.find(places: store.orderedPlaces, referenceZone: zone, from: min(shownStart, todayStart), to: end)
+        let range = ClockChanges.lookahead(shown: store.day, today: CivilDay(now, in: zone), days: lookaheadDays, in: zone)
+        return ClockChanges.find(places: store.orderedPlaces, referenceZone: zone, from: range.lowerBound, to: range.upperBound)
     }
 
     private var header: some View {

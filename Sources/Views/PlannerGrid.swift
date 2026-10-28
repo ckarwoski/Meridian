@@ -164,12 +164,16 @@ private struct HourCell: View {
         let zone = place.timeZone
         let label = Format.cellHour(slot, in: zone, use24Hour: use24Hour)
         let isMidnight = place.localMinuteOfDay(at: slot) < 60
-        // A jump on this cell's left edge, or on its right edge. Hour cells
-        // on either side of a jump are labelled with their zone's
-        // abbreviation, so a repeated hour reads "1a MDT", "1a MST".
+        // A jump on this cell's left edge, or on its right edge.
         let jumpBefore = Timeline.jump(in: zone, at: slot)
         let jumpAfter = Timeline.jump(in: zone, at: slot.addingTimeInterval(3600))
         let clocksChangeInside = Timeline.clocksChange(in: zone, duringHourStarting: slot)
+        // Cells next to or around a change, or whose wall time happens
+        // twice, are labelled with their zone's abbreviation, so a repeated
+        // hour reads "1a MDT", "1a MST" (or "1:30a MDT", "1:30a MST" when
+        // the change falls mid-column).
+        let showZone = Timeline.cellNeedsZone(in: zone, slot: slot)
+        let repeats = Timeline.wallTimeRepeats(in: zone, at: slot)
         let availability = place.availability(at: slot)
         let daylight = showDaylight ? place.daylight(at: slot.addingTimeInterval(1800)) : nil
         let explanation = jumpExplanation(before: jumpBefore, after: jumpAfter, zone: zone)
@@ -185,12 +189,12 @@ private struct HourCell: View {
                             Text(minute).font(.system(size: 8))
                         }
                     }
-                    if let detail = detailLine(zone: zone, showDay: isMidnight || isFirst, showZone: jumpBefore != nil || jumpAfter != nil) {
+                    if let detail = detailLine(zone: zone, showDay: isMidnight || isFirst, showZone: showZone) {
                         // The day marks where each row's local date starts,
                         // since it may differ from the reference date.
                         Text(detail)
                             .font(.system(size: 8, weight: .medium))
-                            .foregroundStyle(jumpBefore != nil || jumpAfter != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(showZone ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     }
                 }
                 .lineLimit(1)
@@ -224,9 +228,9 @@ private struct HourCell: View {
                         .padding(2)
                 }
             }
-            .help(tooltip(zone: zone, clocksChangeInside: clocksChangeInside, daylight: daylight, explanation: explanation))
+            .help(tooltip(zone: zone, clocksChangeInside: clocksChangeInside, repeats: repeats && explanation == nil, daylight: daylight, explanation: explanation))
             .accessibilityElement()
-            .accessibilityLabel(tooltip(zone: zone, clocksChangeInside: clocksChangeInside, daylight: daylight, explanation: explanation))
+            .accessibilityLabel(tooltip(zone: zone, clocksChangeInside: clocksChangeInside, repeats: repeats && explanation == nil, daylight: daylight, explanation: explanation))
     }
 
     /// "Sun 1", "MDT", or "Sun 1 · MDT".
@@ -252,10 +256,13 @@ private struct HourCell: View {
         return "Clocks go back from \(from) to \(to), so \(to)–\(lastRepeated) happens twice. This is the \(which) time (\(abbreviation))."
     }
 
-    private func tooltip(zone: TimeZone, clocksChangeInside: Bool, daylight: Daylight?, explanation: String?) -> String {
+    /// `repeats` adds a note when this wall time happens twice but no jump
+    /// sits on the cell's edge to explain it.
+    private func tooltip(zone: TimeZone, clocksChangeInside: Bool, repeats: Bool, daylight: Daylight?, explanation: String?) -> String {
         var text = "\(place.name): \(Format.shortDay(slot, in: zone)), \(Format.time(slot, in: zone, use24Hour: use24Hour)) (\(Format.utcOffset(zone.secondsFromGMT(for: slot))))"
         if let daylight { text += " — \(daylight.title)" }
         if let explanation { text += "\n" + explanation }
+        if repeats { text += "\n\(Format.time(slot, in: zone, use24Hour: use24Hour)) happens twice here; this one is \(Format.zoneAbbreviation(zone, at: slot))." }
         if clocksChangeInside { text += "\nClocks change during this hour." }
         return text
     }

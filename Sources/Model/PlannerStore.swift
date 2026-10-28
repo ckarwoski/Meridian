@@ -31,12 +31,24 @@ final class PlannerStore {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var isFillingCoordinates = false
+    @ObservationIgnored private var lastCoordinateFill: Date?
+    @ObservationIgnored private let lookUpCoordinates: @MainActor (Place) async -> (latitude: Double, longitude: Double)?
+    @ObservationIgnored private let now: @MainActor () -> Date
+    /// A failed lookup can't tell "offline" from "no such town", so retries
+    /// are spaced out to stay inside MapKit's request budget.
+    @ObservationIgnored private static let coordinateRetryInterval: TimeInterval = 2 * 60
     @ObservationIgnored private static let placesKey = "places.v1"
     @ObservationIgnored private static let referenceKey = "referenceID.v1"
     @ObservationIgnored private static let orderKey = "placeOrder.v1"
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        lookUpCoordinates: @escaping @MainActor (Place) async -> (latitude: Double, longitude: Double)? = PlaceSearch.coordinates,
+        now: @escaping @MainActor () -> Date = { .now }
+    ) {
         self.defaults = defaults
+        self.lookUpCoordinates = lookUpCoordinates
+        self.now = now
         let stored = defaults.data(forKey: Self.placesKey)
             .flatMap { try? JSONDecoder().decode([Place].self, from: $0) } ?? []
         let initial = stored.isEmpty ? [Place.current()] : stored
@@ -101,26 +113,41 @@ final class PlannerStore {
     func remove(id: Place.ID) {
         guard places.count > 1 else { return }
         places.removeAll { $0.id == id }
-        if referenceID == id { referenceID = places[0].id }
+        if referenceID == id {
+            referenceID = places[0].id
+            // The columns now follow another zone, so the old hour may not be one.
+            selectedSlot = nil
+        }
         save()
     }
 
     /// Looks up coordinates for city places saved before they were kept.
-    /// Safe to call from every scene: only the first call does the work.
+    /// Safe to call from every scene and as often as needed: one pass runs
+    /// at a time, and places whose lookup failed are retried by a later call
+    /// once the retry interval has passed.
     func fillMissingCoordinates() async {
+        if let last = lastCoordinateFill, now().timeIntervalSince(last) < Self.coordinateRetryInterval { return }
         guard !isFillingCoordinates else { return }
         isFillingCoordinates = true
+        defer { isFillingCoordinates = false }
         for place in places where place.latitude == nil && !place.isTimeZoneOnly {
-            guard let found = await PlaceSearch.coordinates(for: place), var current = self.place(id: place.id) else { continue }
+            // A cancelled pass doesn't count, so the next call starts afresh.
+            if Task.isCancelled { return }
+            guard let found = await lookUpCoordinates(place), var current = self.place(id: place.id) else { continue }
             current.latitude = found.latitude
             current.longitude = found.longitude
             update(current)
         }
+        // Cancelled during the last lookup: still not a pass that counts.
+        if Task.isCancelled { return }
+        lastCoordinateFill = now()
     }
 
     func makeReference(id: Place.ID) {
-        guard place(id: id) != nil else { return }
+        guard place(id: id) != nil, id != referenceID else { return }
         referenceID = id
+        // The columns now follow another zone, so the old hour may not be one.
+        selectedSlot = nil
         save()
     }
 

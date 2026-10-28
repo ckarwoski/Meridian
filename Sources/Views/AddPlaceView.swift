@@ -8,6 +8,7 @@ struct AddPlaceView: View {
     @State private var search = PlaceSearch()
     @State private var query = ""
     @State private var resolving: MKLocalSearchCompletion?
+    @State private var resolveTask: Task<Void, Never>?
     @State private var errorMessage: String?
     @FocusState private var fieldFocused: Bool
 
@@ -17,6 +18,8 @@ struct AddPlaceView: View {
                 .textFieldStyle(.roundedBorder)
                 .focused($fieldFocused)
                 .onChange(of: query) { _, newValue in
+                    // The lookup's row may be gone now, and the user has moved on.
+                    cancelResolve()
                     errorMessage = nil
                     search.update(query: newValue)
                 }
@@ -40,6 +43,7 @@ struct AddPlaceView: View {
                                 row(title: place.name, detail: place.detail, busy: false)
                             }
                             .buttonStyle(.plain)
+                            .disabled(resolving != nil)
                         }
                     }
                 }
@@ -66,6 +70,7 @@ struct AddPlaceView: View {
         .padding(12)
         .frame(width: 380, height: 360)
         .onAppear { fieldFocused = true }
+        .onDisappear(perform: cancelResolve)
     }
 
     private func row(title: String, detail: String, busy: Bool) -> some View {
@@ -83,6 +88,7 @@ struct AddPlaceView: View {
     }
 
     private func addFirst() {
+        guard resolving == nil else { return }
         if let first = search.completions.first {
             add(first)
         } else if let first = search.zoneMatches.first {
@@ -93,14 +99,26 @@ struct AddPlaceView: View {
     private func add(_ completion: MKLocalSearchCompletion) {
         guard resolving == nil else { return }
         resolving = completion
-        Task {
-            defer { resolving = nil }
+        resolveTask = Task {
             do {
-                finish(try await search.resolve(completion))
+                let place = try await search.resolve(completion)
+                // Dismissed or superseded while MapKit was busy: add nothing.
+                guard !Task.isCancelled else { return }
+                finish(place)
             } catch {
+                guard !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
             }
+            resolving = nil
+            resolveTask = nil
         }
+    }
+
+    /// Stops an in-flight city lookup so it can't add a place later.
+    private func cancelResolve() {
+        resolveTask?.cancel()
+        resolveTask = nil
+        resolving = nil
     }
 
     private func finish(_ place: Place) {

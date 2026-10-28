@@ -12,6 +12,8 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
     private(set) var failed = false
 
     @ObservationIgnored private let completer = MKLocalSearchCompleter()
+    /// The trimmed query that `completions` must belong to.
+    @ObservationIgnored private var currentQuery = ""
 
     override init() {
         super.init()
@@ -25,10 +27,20 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         failed = false
         zoneMatches = Self.zones(matching: trimmed)
+        // Drop the old query's places now rather than when MapKit replies, so
+        // Return can't add London after the field changes to "UTC".
+        let changed = trimmed != currentQuery
+        if changed { completions = [] }
+        currentQuery = trimmed
         if trimmed.isEmpty {
+            // Don't blank queryFragment here: that fails later with an error
+            // that would land on the next query.
             completer.cancel()
-            completions = []
         } else {
+            // cancel() keeps the old fragment, and setting the same fragment
+            // again starts no search, so clearing and retyping "London" would
+            // leave Places empty. Nudge it so a new search runs.
+            if changed && completer.queryFragment == trimmed { completer.queryFragment = "" }
             completer.queryFragment = trimmed
         }
     }
@@ -73,16 +85,29 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
         var errorDescription: String? { "MapKit didn't return a time zone for that place." }
     }
 
+    /// Takes completer results unless the field is empty, so a late reply
+    /// can't repopulate a cleared field. The completer can't say which query
+    /// a reply answers, so one for an earlier non-empty query still gets in.
+    func accept(_ results: [MKLocalSearchCompletion]) {
+        guard !currentQuery.isEmpty else { return }
+        completions = Array(results.prefix(8))
+    }
+
+    func fail() {
+        guard !currentQuery.isEmpty else { return }
+        completions = []
+        failed = true
+    }
+
     nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
         MainActor.assumeIsolated {
-            completions = Array(self.completer.results.prefix(8))
+            accept(self.completer.results)
         }
     }
 
     nonisolated func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: any Error) {
         MainActor.assumeIsolated {
-            completions = []
-            failed = true
+            fail()
         }
     }
 
@@ -95,7 +120,15 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
             if zone?.localizedName(for: .generic, locale: .current)?.localizedCaseInsensitiveContains(query) == true { return true }
             return zone?.abbreviation()?.caseInsensitiveCompare(query) == .orderedSame
         }
-        if "UTC".localizedCaseInsensitiveContains(query) || "Coordinated Universal Time".localizedCaseInsensitiveContains(query) {
+        // Offer UTC only for a prefix of its abbreviation or full name, so
+        // "time" or "in" don't pin it to the top. Three letters for the full
+        // name, so "co" stays a city search.
+        func starts(_ name: String) -> Bool {
+            name.range(of: query, options: [.anchored, .caseInsensitive]) != nil
+        }
+        let meansUTC = starts("UTC") || (query.count >= 3 && (starts("Coordinated Universal Time") || starts("Universal Time")))
+        if meansUTC {
+            identifiers.removeAll { $0 == "UTC" }
             identifiers.insert("UTC", at: 0)
         }
         return identifiers.prefix(6).map { identifier in

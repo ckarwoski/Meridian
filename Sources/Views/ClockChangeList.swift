@@ -13,7 +13,7 @@ struct ClockChangeList: View {
         let groups = ClockChangeGroup.grouping(changes)
         VStack(alignment: .leading, spacing: 8) {
             if groups.isEmpty {
-                Label("No clock changes for these places from today through \(lookaheadDays) days after the shown day.", systemImage: "checkmark.circle")
+                Label("No clock changes for these places from \(store.day < CivilDay(.now, in: store.referenceZone) ? "the shown day" : "today") through \(lookaheadDays) days after the shown day.", systemImage: "checkmark.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {

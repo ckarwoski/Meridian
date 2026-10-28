@@ -62,9 +62,15 @@ extension Place {
     func availability(at date: Date) -> Availability {
         let minute = localMinuteOfDay(at: date)
         if Self.contains(minute, from: workStart, to: workEnd) { return .working }
-        let start = (workStart - Self.shoulderMinutes + 1440) % 1440
-        let end = (workEnd + Self.shoulderMinutes) % 1440
-        if Self.contains(minute, from: start, to: end) { return .shoulder }
+        // No working day means no shoulders either.
+        if workStart == workEnd { return .night }
+        // Check each shoulder on its own: widening the whole window instead
+        // makes the ends cross when the off-duty gap is four hours or less.
+        let before = (workStart - Self.shoulderMinutes + 1440) % 1440
+        let after = (workEnd + Self.shoulderMinutes) % 1440
+        if Self.contains(minute, from: before, to: workStart) || Self.contains(minute, from: workEnd, to: after) {
+            return .shoulder
+        }
         return .night
     }
 

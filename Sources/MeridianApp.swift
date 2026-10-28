@@ -2,8 +2,20 @@ import SwiftUI
 
 @main
 struct MeridianApp: App {
-    @State private var store = PlannerStore()
+    @State private var store: PlannerStore
     @AppStorage(SettingsKey.showInMenuBar) private var showInMenuBar = true
+
+    init() {
+        let store = PlannerStore()
+        _store = State(initialValue: store)
+        // Lives as long as the app, whichever scenes are open, so lookups
+        // that failed (e.g. offline) are retried later in the session.
+        Task {
+            for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) {
+                await store.fillMissingCoordinates()
+            }
+        }
+    }
 
     var body: some Scene {
         Window("Meridian", id: PlannerView.windowID) {

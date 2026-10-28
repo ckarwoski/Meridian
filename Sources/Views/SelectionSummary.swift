@@ -20,10 +20,19 @@ struct SelectionSummary: View {
                                 Circle().fill(place.availability(at: slot).fill).frame(width: 8, height: 8)
                                 Text(place.name).font(.caption.weight(.semibold))
                             }
-                            Text(Format.time(slot, in: zone, use24Hour: use24Hour))
-                                .font(.title3.monospacedDigit().weight(.medium))
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(Format.time(slot, in: zone, use24Hour: use24Hour))
+                                    .font(.title3.monospacedDigit().weight(.medium))
+                                // On the day the clocks go back, this wall time
+                                // happens twice: say which one.
+                                if Timeline.wallTimeRepeats(in: zone, at: slot) {
+                                    Text(Format.zoneAbbreviation(zone, at: slot))
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.orange)
+                                }
+                            }
                             let dayOffset = daysFromReference(zone)
-                            Text(Format.shortDay(slot, in: zone) + (dayOffset > 0 ? " · next day" : dayOffset < 0 ? " · previous day" : ""))
+                            Text(Format.shortDay(slot, in: zone) + Self.dayNote(dayOffset))
                                 .font(.caption2.weight(dayOffset == 0 ? .regular : .bold))
                                 .foregroundStyle(dayOffset == 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                         }
@@ -41,12 +50,22 @@ struct SelectionSummary: View {
         }
     }
 
-    /// +1 when the slot falls on the next calendar day in `zone` than in
-    /// the reference zone, -1 for the previous day.
+    /// Calendar days from the slot's date in the reference zone to its date
+    /// in `zone`: +1 for the next day, -2 for two days earlier.
     private func daysFromReference(_ zone: TimeZone) -> Int {
-        let here = CivilDay(slot, in: zone)
-        let there = CivilDay(slot, in: store.referenceZone)
-        return here == there ? 0 : here < there ? -1 : 1
+        CivilDay(slot, in: store.referenceZone).days(to: CivilDay(slot, in: zone))
+    }
+
+    /// The note after a place's date: " · next day", " · 2 days earlier",
+    /// or nothing on the reference day.
+    nonisolated static func dayNote(_ offset: Int) -> String {
+        switch offset {
+        case 0: ""
+        case 1: " · next day"
+        case -1: " · previous day"
+        case 2...: " · \(offset) days later"
+        default: " · \(-offset) days earlier"
+        }
     }
 
     private func copy() {
